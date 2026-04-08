@@ -417,7 +417,9 @@ describe("githubCopilot factory", () => {
     const provider = githubCopilot("gpt-4o");
     const command = provider.buildPrintCommand("do something");
     expect(command).toContain("gpt-4o");
-    expect(command).toContain("--output-format stream-json");
+    expect(command).toContain("--output-format json");
+    expect(command).toContain("--stream on");
+    expect(command).toContain("--yolo");
     expect(command).toContain("-p");
   });
 
@@ -449,59 +451,95 @@ describe("githubCopilot factory", () => {
     expect(args).toContain("--model");
   });
 
-  it("parseStreamLine extracts text from message.delta event", () => {
+  it("parseStreamLine extracts text from raw non-JSON lines (prompt mode deltas)", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider.parseStreamLine("Hello world")).toEqual([
+      { type: "text", text: "Hello world" },
+    ]);
+  });
+
+  it("parseStreamLine returns empty array for blank lines", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider.parseStreamLine("")).toEqual([]);
+    expect(provider.parseStreamLine("   ")).toEqual([]);
+  });
+
+  it("parseStreamLine extracts text from copilot event", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "message.delta",
-      content: "Hello world",
+      type: "copilot",
+      text: "Hello world",
     });
     expect(provider.parseStreamLine(line)).toEqual([
       { type: "text", text: "Hello world" },
     ]);
   });
 
-  it("parseStreamLine extracts tool call from tool.start event", () => {
+  it("parseStreamLine extracts text from assistant.message_delta event", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "tool.start",
-      name: "Bash",
-      parameters: { command: "npm test" },
+      type: "assistant.message_delta",
+      data: { messageId: "abc", deltaContent: "Hello world" },
     });
     expect(provider.parseStreamLine(line)).toEqual([
-      { type: "tool_call", name: "Bash", args: "npm test" },
+      { type: "text", text: "Hello world" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool call from tool_call_requested event", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool_call_requested",
+      name: "bash",
+      arguments: { command: "npm test" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "bash", args: "npm test" },
+    ]);
+  });
+
+  it("parseStreamLine handles tool_call_requested with stringified arguments", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool_call_requested",
+      name: "bash",
+      arguments: JSON.stringify({ command: "npm test" }),
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "bash", args: "npm test" },
     ]);
   });
 
   it("parseStreamLine skips non-allowlisted tools", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "tool.start",
+      type: "tool_call_requested",
       name: "UnknownTool",
-      parameters: { foo: "bar" },
+      arguments: { foo: "bar" },
     });
     expect(provider.parseStreamLine(line)).toEqual([]);
   });
 
-  it("parseStreamLine extracts result from message.completed event", () => {
+  it("parseStreamLine extracts result from result event", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "message.completed",
-      content: "Final answer <promise>COMPLETE</promise>",
+      type: "result",
+      exitCode: 0,
     });
     expect(provider.parseStreamLine(line)).toEqual([
       {
         type: "result",
-        result: "Final answer <promise>COMPLETE</promise>",
+        result: "",
         usage: null,
       },
     ]);
   });
 
-  it("parseStreamLine extracts usage from message.completed event when present", () => {
+  it("parseStreamLine extracts usage from result event when present", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "message.completed",
-      content: "Done",
+      type: "result",
+      exitCode: 0,
       usage: {
         input_tokens: 200,
         output_tokens: 100,
@@ -527,12 +565,6 @@ describe("githubCopilot factory", () => {
     });
   });
 
-  it("parseStreamLine returns empty array for non-JSON lines", () => {
-    const provider = githubCopilot("gpt-4o");
-    expect(provider.parseStreamLine("not json")).toEqual([]);
-    expect(provider.parseStreamLine("")).toEqual([]);
-  });
-
   it("parseStreamLine returns empty array for unrecognized event types", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({ type: "unknown_event", data: "foo" });
@@ -544,33 +576,27 @@ describe("githubCopilot factory", () => {
     expect(provider.parseStreamLine("{bad json")).toEqual([]);
   });
 
-  it("parseStreamLine handles message.delta with missing content", () => {
+  it("parseStreamLine handles copilot event with missing text", () => {
     const provider = githubCopilot("gpt-4o");
-    const line = JSON.stringify({ type: "message.delta" });
+    const line = JSON.stringify({ type: "copilot" });
     expect(provider.parseStreamLine(line)).toEqual([]);
   });
 
-  it("parseStreamLine handles tool.start with missing parameters", () => {
+  it("parseStreamLine handles tool_call_requested with missing arguments", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "tool.start",
-      name: "Bash",
+      type: "tool_call_requested",
+      name: "bash",
     });
     expect(provider.parseStreamLine(line)).toEqual([]);
   });
 
-  it("parseStreamLine handles tool.start with missing name", () => {
+  it("parseStreamLine handles tool_call_requested with missing name", () => {
     const provider = githubCopilot("gpt-4o");
     const line = JSON.stringify({
-      type: "tool.start",
-      parameters: { command: "npm test" },
+      type: "tool_call_requested",
+      arguments: { command: "npm test" },
     });
-    expect(provider.parseStreamLine(line)).toEqual([]);
-  });
-
-  it("parseStreamLine handles message.completed with missing content", () => {
-    const provider = githubCopilot("gpt-4o");
-    const line = JSON.stringify({ type: "message.completed" });
     expect(provider.parseStreamLine(line)).toEqual([]);
   });
 
