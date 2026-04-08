@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeCode, codex, pi } from "./AgentProvider.js";
+import { claudeCode, codex, githubCopilot, pi } from "./AgentProvider.js";
 
 describe("claudeCode factory", () => {
   it("returns a provider with name 'claude-code'", () => {
@@ -391,6 +391,184 @@ describe("codex factory", () => {
   it("bakes model into each provider instance independently", () => {
     const provider1 = codex("model-a");
     const provider2 = codex("model-b");
+    expect(provider1.buildPrintCommand("test")).toContain("model-a");
+    expect(provider2.buildPrintCommand("test")).toContain("model-b");
+    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// githubCopilot factory
+// ---------------------------------------------------------------------------
+
+describe("githubCopilot factory", () => {
+  it("returns a provider with name 'github-copilot'", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider.name).toBe("github-copilot");
+  });
+
+  it("does not expose envManifest or dockerfileTemplate", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider).not.toHaveProperty("envManifest");
+    expect(provider).not.toHaveProperty("dockerfileTemplate");
+  });
+
+  it("buildPrintCommand includes the model and copilot flags", () => {
+    const provider = githubCopilot("gpt-4o");
+    const command = provider.buildPrintCommand("do something");
+    expect(command).toContain("gpt-4o");
+    expect(command).toContain("--output-format stream-json");
+    expect(command).toContain("-p");
+  });
+
+  it("buildPrintCommand shell-escapes the prompt", () => {
+    const provider = githubCopilot("gpt-4o");
+    const command = provider.buildPrintCommand("it's a test");
+    expect(command).toContain("'it'\\''s a test'");
+  });
+
+  it("buildPrintCommand shell-escapes the model", () => {
+    const provider = githubCopilot("gpt-4o");
+    const command = provider.buildPrintCommand("do something");
+    expect(command).toContain("--model 'gpt-4o'");
+  });
+
+  it("buildInteractiveArgs includes the binary and model", () => {
+    const provider = githubCopilot("gpt-4o");
+    const args = provider.buildInteractiveArgs("");
+    expect(args[0]).toBe("copilot");
+    expect(args).toContain("gpt-4o");
+    expect(args).toContain("--model");
+  });
+
+  it("parseStreamLine extracts text from message.delta event", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "message.delta",
+      content: "Hello world",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "text", text: "Hello world" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool call from tool.start event", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool.start",
+      name: "Bash",
+      parameters: { command: "npm test" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "Bash", args: "npm test" },
+    ]);
+  });
+
+  it("parseStreamLine skips non-allowlisted tools", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool.start",
+      name: "UnknownTool",
+      parameters: { foo: "bar" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine extracts result from message.completed event", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "message.completed",
+      content: "Final answer <promise>COMPLETE</promise>",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      {
+        type: "result",
+        result: "Final answer <promise>COMPLETE</promise>",
+        usage: null,
+      },
+    ]);
+  });
+
+  it("parseStreamLine extracts usage from message.completed event when present", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "message.completed",
+      content: "Done",
+      usage: {
+        input_tokens: 200,
+        output_tokens: 100,
+        cache_read_input_tokens: 20,
+        cache_creation_input_tokens: 10,
+      },
+      total_cost_usd: 0.02,
+      num_turns: 5,
+      duration_ms: 8000,
+    });
+    const events = provider.parseStreamLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe("result");
+    const result = events[0] as { type: "result"; usage: unknown };
+    expect(result.usage).toEqual({
+      input_tokens: 200,
+      output_tokens: 100,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 10,
+      total_cost_usd: 0.02,
+      num_turns: 5,
+      duration_ms: 8000,
+    });
+  });
+
+  it("parseStreamLine returns empty array for non-JSON lines", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider.parseStreamLine("not json")).toEqual([]);
+    expect(provider.parseStreamLine("")).toEqual([]);
+  });
+
+  it("parseStreamLine returns empty array for unrecognized event types", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({ type: "unknown_event", data: "foo" });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine returns empty array for malformed JSON", () => {
+    const provider = githubCopilot("gpt-4o");
+    expect(provider.parseStreamLine("{bad json")).toEqual([]);
+  });
+
+  it("parseStreamLine handles message.delta with missing content", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({ type: "message.delta" });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine handles tool.start with missing parameters", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool.start",
+      name: "Bash",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine handles tool.start with missing name", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({
+      type: "tool.start",
+      parameters: { command: "npm test" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine handles message.completed with missing content", () => {
+    const provider = githubCopilot("gpt-4o");
+    const line = JSON.stringify({ type: "message.completed" });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("bakes model into each provider instance independently", () => {
+    const provider1 = githubCopilot("model-a");
+    const provider2 = githubCopilot("model-b");
     expect(provider1.buildPrintCommand("test")).toContain("model-a");
     expect(provider2.buildPrintCommand("test")).toContain("model-b");
     expect(provider1.buildPrintCommand("test")).not.toContain("model-b");

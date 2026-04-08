@@ -231,6 +231,59 @@ export const codex = (model: string): AgentProvider => ({
 });
 
 // ---------------------------------------------------------------------------
+// GitHub Copilot agent provider
+// ---------------------------------------------------------------------------
+
+const parseGitHubCopilotStreamLine = (line: string): ParsedStreamEvent[] => {
+  if (!line.startsWith("{")) return [];
+  try {
+    const obj = JSON.parse(line);
+
+    // message.delta → text
+    if (obj.type === "message.delta" && typeof obj.content === "string") {
+      return [{ type: "text", text: obj.content }];
+    }
+
+    // tool.start → tool call
+    if (obj.type === "tool.start" && typeof obj.name === "string") {
+      const argField = TOOL_ARG_FIELDS[obj.name];
+      if (argField === undefined) return [];
+      const params = obj.parameters as Record<string, unknown> | undefined;
+      if (!params) return [];
+      const argValue = params[argField];
+      if (typeof argValue !== "string") return [];
+      return [{ type: "tool_call", name: obj.name, args: argValue }];
+    }
+
+    // message.completed → result
+    if (obj.type === "message.completed" && typeof obj.content === "string") {
+      return [
+        { type: "result", result: obj.content, usage: extractUsage(obj) },
+      ];
+    }
+  } catch {
+    // Not valid JSON — skip
+  }
+  return [];
+};
+
+export const githubCopilot = (model: string): AgentProvider => ({
+  name: "github-copilot",
+
+  buildPrintCommand(prompt: string): string {
+    return `copilot -p --output-format stream-json --model ${shellEscape(model)} ${shellEscape(prompt)}`;
+  },
+
+  buildInteractiveArgs(_prompt: string): string[] {
+    return ["copilot", "--model", model];
+  },
+
+  parseStreamLine(line: string): ParsedStreamEvent[] {
+    return parseGitHubCopilotStreamLine(line);
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Claude Code agent provider
 // ---------------------------------------------------------------------------
 
