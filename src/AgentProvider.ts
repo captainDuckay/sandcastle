@@ -271,11 +271,17 @@ export const githubCopilot = (model: string): AgentProvider => ({
   name: "github-copilot",
 
   buildPrintCommand(prompt: string): string {
-    return `copilot -p --output-format stream-json --model ${shellEscape(model)} ${shellEscape(prompt)}`;
+    return `GH_TOKEN=$COPILOT_GITHUB_TOKEN copilot -p --output-format stream-json --model ${shellEscape(model)} ${shellEscape(prompt)}`;
   },
 
   buildInteractiveArgs(_prompt: string): string[] {
-    return ["copilot", "--model", model];
+    return [
+      "env",
+      "GH_TOKEN=$COPILOT_GITHUB_TOKEN",
+      "copilot",
+      "--model",
+      model,
+    ];
   },
 
   parseStreamLine(line: string): ParsedStreamEvent[] {

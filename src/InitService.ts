@@ -47,6 +47,11 @@ export interface AgentEntry {
   readonly defaultModel: string;
   readonly factoryImport: string;
   readonly dockerfileTemplate: string;
+  /** Map of env var replacements for .env.example (old key → new key + comment) */
+  readonly envExampleReplacements?: ReadonlyMap<
+    string,
+    { key: string; comment: string }
+  >;
 }
 
 const CLAUDE_CODE_DOCKERFILE = `FROM node:22-bookworm
@@ -211,6 +216,15 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "gpt-4o",
     factoryImport: "githubCopilot",
     dockerfileTemplate: GITHUB_COPILOT_DOCKERFILE,
+    envExampleReplacements: new Map([
+      [
+        "ANTHROPIC_API_KEY",
+        {
+          key: "COPILOT_GITHUB_TOKEN",
+          comment: "# Fine-grained GitHub PAT for Copilot",
+        },
+      ],
+    ]),
   },
 ];
 
@@ -359,6 +373,48 @@ const rewriteMainTs = (
       .pipe(Effect.mapError((e) => new Error(e.message)));
   });
 
+/**
+ * Rewrite `.env.example` to swap agent-specific env vars.
+ *
+ * When an agent declares `envExampleReplacements`, each matching line
+ * (comment + KEY=) is replaced with the agent-specific key/comment.
+ */
+const rewriteEnvExample = (
+  configDir: string,
+  agent: AgentEntry,
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (
+      !agent.envExampleReplacements ||
+      agent.envExampleReplacements.size === 0
+    )
+      return;
+
+    const fs = yield* FileSystem.FileSystem;
+    const envPath = join(configDir, ".env.example");
+
+    const exists = yield* fs
+      .exists(envPath)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+    if (!exists) return;
+
+    let content = yield* fs
+      .readFileString(envPath)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    for (const [oldKey, { key, comment }] of agent.envExampleReplacements) {
+      // Replace comment line + key line, e.g.:
+      //   # Anthropic API key\nANTHROPIC_API_KEY=
+      // → # Fine-grained GitHub PAT for Copilot\nCOPILOT_GITHUB_TOKEN=
+      const pattern = new RegExp(`#[^\\n]*\\n${oldKey}=`, "g");
+      content = content.replace(pattern, `${comment}\n${key}=`);
+    }
+
+    yield* fs
+      .writeFileString(envPath, content)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+  });
+
 // ---------------------------------------------------------------------------
 // Main scaffold function
 // ---------------------------------------------------------------------------
@@ -444,6 +500,9 @@ export const scaffold = (
 
     // Rewrite main file with the selected agent factory and model
     yield* rewriteMainTs(configDir, agent, model, mainFilename);
+
+    // Rewrite .env.example for agent-specific env vars
+    yield* rewriteEnvExample(configDir, agent);
 
     return { mainFilename };
   });

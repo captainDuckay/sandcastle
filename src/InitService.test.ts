@@ -102,6 +102,10 @@ describe("Agent registry", () => {
     expect(agent!.factoryImport).toBe("githubCopilot");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain("@githubnext/copilot-cli");
+    expect(agent!.envExampleReplacements).toBeDefined();
+    expect(
+      agent!.envExampleReplacements!.get("ANTHROPIC_API_KEY"),
+    ).toMatchObject({ key: "COPILOT_GITHUB_TOKEN" });
   });
 });
 
@@ -595,6 +599,22 @@ describe("InitService scaffold", () => {
     );
     expect(mainTs).toContain('githubCopilot("gpt-4o")');
     expect(mainTs).not.toContain("claudeCode");
+  });
+
+  it("rewrites .env.example to use COPILOT_GITHUB_TOKEN when github-copilot agent selected", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      agent: githubCopilotAgent,
+      model: "gpt-4o",
+    });
+
+    const envExample = await readFile(
+      join(dir, ".sandcastle", ".env.example"),
+      "utf-8",
+    );
+    expect(envExample).toContain("COPILOT_GITHUB_TOKEN=");
+    expect(envExample).not.toContain("ANTHROPIC_API_KEY");
+    expect(envExample).toContain("GH_TOKEN=");
   });
 
   it("unknown template name throws a clear error", async () => {

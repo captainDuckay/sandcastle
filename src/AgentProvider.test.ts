@@ -421,6 +421,12 @@ describe("githubCopilot factory", () => {
     expect(command).toContain("-p");
   });
 
+  it("buildPrintCommand prefixes with GH_TOKEN=$COPILOT_GITHUB_TOKEN", () => {
+    const provider = githubCopilot("gpt-4o");
+    const command = provider.buildPrintCommand("do something");
+    expect(command).toMatch(/^GH_TOKEN=\$COPILOT_GITHUB_TOKEN /);
+  });
+
   it("buildPrintCommand shell-escapes the prompt", () => {
     const provider = githubCopilot("gpt-4o");
     const command = provider.buildPrintCommand("it's a test");
@@ -433,10 +439,12 @@ describe("githubCopilot factory", () => {
     expect(command).toContain("--model 'gpt-4o'");
   });
 
-  it("buildInteractiveArgs includes the binary and model", () => {
+  it("buildInteractiveArgs includes env override, binary, and model", () => {
     const provider = githubCopilot("gpt-4o");
     const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("copilot");
+    expect(args[0]).toBe("env");
+    expect(args[1]).toBe("GH_TOKEN=$COPILOT_GITHUB_TOKEN");
+    expect(args[2]).toBe("copilot");
     expect(args).toContain("gpt-4o");
     expect(args).toContain("--model");
   });
