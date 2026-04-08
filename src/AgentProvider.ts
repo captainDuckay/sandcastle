@@ -45,9 +45,13 @@ const extractUsage = (obj: Record<string, unknown>): TokenUsage | null => {
 /** Maps allowlisted tool names to the input field containing the display arg */
 const TOOL_ARG_FIELDS: Record<string, string> = {
   Bash: "command",
+  bash: "command",
   WebSearch: "query",
+  web_search: "query",
   WebFetch: "url",
+  web_fetch: "url",
   Agent: "description",
+  agent: "description",
 };
 
 const parseStreamJsonLine = (line: string): ParsedStreamEvent[] => {
@@ -227,6 +231,84 @@ export const codex = (model: string): AgentProvider => ({
 
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parseCodexStreamLine(line);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// GitHub Copilot agent provider
+// ---------------------------------------------------------------------------
+
+const parseGitHubCopilotStreamLine = (line: string): ParsedStreamEvent[] => {
+  // In prompt mode with --output-format json, the copilot CLI writes:
+  //   • Raw text lines to stdout (message content deltas)
+  //   • JSONL event objects for tool calls, results, etc.
+  // Non-JSON lines are the agent's streamed text output.
+  if (!line.startsWith("{")) {
+    return line.trim() ? [{ type: "text", text: line }] : [];
+  }
+  try {
+    const obj = JSON.parse(line);
+
+    // copilot message event → text
+    if (obj.type === "copilot" && typeof obj.text === "string") {
+      return [{ type: "text", text: obj.text }];
+    }
+
+    // assistant.message_delta → text (non-prompt mode path)
+    if (
+      obj.type === "assistant.message_delta" &&
+      typeof obj.data?.deltaContent === "string"
+    ) {
+      return [{ type: "text", text: obj.data.deltaContent }];
+    }
+
+    // tool_call_requested → tool call
+    if (obj.type === "tool_call_requested" && typeof obj.name === "string") {
+      const argField = TOOL_ARG_FIELDS[obj.name];
+      if (argField === undefined) return [];
+      const args = (
+        typeof obj.arguments === "string"
+          ? JSON.parse(obj.arguments)
+          : obj.arguments
+      ) as Record<string, unknown> | undefined;
+      if (!args) return [];
+      const argValue = args[argField];
+      if (typeof argValue !== "string") return [];
+      return [{ type: "tool_call", name: obj.name, args: argValue }];
+    }
+
+    // result → completion with usage
+    if (obj.type === "result") {
+      return [
+        { type: "result", result: obj.content ?? "", usage: extractUsage(obj) },
+      ];
+    }
+  } catch {
+    // Not valid JSON — skip
+  }
+  return [];
+};
+
+export const githubCopilot = (model: string): AgentProvider => ({
+  name: "github-copilot",
+
+  buildPrintCommand(prompt: string): string {
+    return `GH_TOKEN=$COPILOT_GITHUB_TOKEN copilot --output-format json --stream on --yolo --model ${shellEscape(model)} -p ${shellEscape(prompt)}`;
+  },
+
+  buildInteractiveArgs(_prompt: string): string[] {
+    return [
+      "env",
+      "GH_TOKEN=$COPILOT_GITHUB_TOKEN",
+      "copilot",
+      "--yolo",
+      "--model",
+      model,
+    ];
+  },
+
+  parseStreamLine(line: string): ParsedStreamEvent[] {
+    return parseGitHubCopilotStreamLine(line);
   },
 });
 

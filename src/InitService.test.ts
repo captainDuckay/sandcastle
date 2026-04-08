@@ -20,6 +20,7 @@ const makeDir = () => mkdtemp(join(tmpdir(), "init-service-"));
 const claudeCodeAgent = getAgent("claude-code")!;
 const piAgent = getAgent("pi")!;
 const codexAgent = getAgent("codex")!;
+const githubCopilotAgent = getAgent("github-copilot")!;
 
 const defaultOptions: ScaffoldOptions = {
   agent: claudeCodeAgent,
@@ -86,6 +87,25 @@ describe("Agent registry", () => {
     expect(agent!.factoryImport).toBe("codex");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain("@openai/codex");
+  });
+
+  it("listAgents includes github-copilot", () => {
+    const agents = listAgents();
+    expect(agents.some((a) => a.name === "github-copilot")).toBe(true);
+  });
+
+  it("getAgent returns github-copilot entry with expected fields", () => {
+    const agent = getAgent("github-copilot");
+    expect(agent).toBeDefined();
+    expect(agent!.name).toBe("github-copilot");
+    expect(agent!.defaultModel).toBe("gpt-4o");
+    expect(agent!.factoryImport).toBe("githubCopilot");
+    expect(agent!.dockerfileTemplate).toContain("FROM");
+    expect(agent!.dockerfileTemplate).toContain("@github/copilot");
+    expect(agent!.envExampleReplacements).toBeDefined();
+    expect(
+      agent!.envExampleReplacements!.get("ANTHROPIC_API_KEY"),
+    ).toMatchObject({ key: "COPILOT_GITHUB_TOKEN" });
   });
 });
 
@@ -549,6 +569,52 @@ describe("InitService scaffold", () => {
     );
     expect(mainTs).toContain('codex("gpt-5.4-mini")');
     expect(mainTs).not.toContain("claudeCode");
+  });
+
+  it("scaffolds github-copilot agent with github-copilot Dockerfile", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      agent: githubCopilotAgent,
+      model: "gpt-4o",
+    });
+
+    const dockerfile = await readFile(
+      join(dir, ".sandcastle", "Dockerfile"),
+      "utf-8",
+    );
+    expect(dockerfile).toBe(githubCopilotAgent.dockerfileTemplate);
+    expect(dockerfile).toContain("@github/copilot");
+  });
+
+  it("scaffolds main.mts with githubCopilot factory import when github-copilot agent selected", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      agent: githubCopilotAgent,
+      model: "gpt-4o",
+    });
+
+    const mainTs = await readFile(
+      join(dir, ".sandcastle", "main.mts"),
+      "utf-8",
+    );
+    expect(mainTs).toContain('githubCopilot("gpt-4o")');
+    expect(mainTs).not.toContain("claudeCode");
+  });
+
+  it("rewrites .env.example to use COPILOT_GITHUB_TOKEN when github-copilot agent selected", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      agent: githubCopilotAgent,
+      model: "gpt-4o",
+    });
+
+    const envExample = await readFile(
+      join(dir, ".sandcastle", ".env.example"),
+      "utf-8",
+    );
+    expect(envExample).toContain("COPILOT_GITHUB_TOKEN=");
+    expect(envExample).not.toContain("ANTHROPIC_API_KEY");
+    expect(envExample).toContain("GH_TOKEN=");
   });
 
   it("unknown template name throws a clear error", async () => {

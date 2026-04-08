@@ -47,6 +47,11 @@ export interface AgentEntry {
   readonly defaultModel: string;
   readonly factoryImport: string;
   readonly dockerfileTemplate: string;
+  /** Map of env var replacements for .env.example (old key → new key + comment) */
+  readonly envExampleReplacements?: ReadonlyMap<
+    string,
+    { key: string; comment: string }
+  >;
 }
 
 const CLAUDE_CODE_DOCKERFILE = `FROM node:22-bookworm
@@ -150,6 +155,39 @@ WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
 `;
 
+const GITHUB_COPILOT_DOCKERFILE = `FROM node:22-bookworm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \\
+  git \\
+  curl \\
+  jq \\
+  && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
+  | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \\
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \\
+  | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \\
+  && apt-get update && apt-get install -y gh \\
+  && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user
+RUN useradd -m -s /bin/bash agent
+
+# Install GitHub Copilot CLI (run as root before USER agent)
+RUN npm i -g @github/copilot
+
+USER agent
+
+WORKDIR /home/agent
+
+# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_WORKSPACE_DIR}
+# and overrides the working directory to ${SANDBOX_WORKSPACE_DIR} at container start.
+# Structure your Dockerfile so that ${SANDBOX_WORKSPACE_DIR} can serve as the project root.
+ENTRYPOINT ["sleep", "infinity"]
+`;
+
 const AGENT_REGISTRY: AgentEntry[] = [
   {
     name: "claude-code",
@@ -171,6 +209,22 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "gpt-5.4-mini",
     factoryImport: "codex",
     dockerfileTemplate: CODEX_DOCKERFILE,
+  },
+  {
+    name: "github-copilot",
+    label: "GitHub Copilot",
+    defaultModel: "gpt-4o",
+    factoryImport: "githubCopilot",
+    dockerfileTemplate: GITHUB_COPILOT_DOCKERFILE,
+    envExampleReplacements: new Map([
+      [
+        "ANTHROPIC_API_KEY",
+        {
+          key: "COPILOT_GITHUB_TOKEN",
+          comment: "# Fine-grained GitHub PAT for Copilot",
+        },
+      ],
+    ]),
   },
 ];
 
@@ -319,6 +373,48 @@ const rewriteMainTs = (
       .pipe(Effect.mapError((e) => new Error(e.message)));
   });
 
+/**
+ * Rewrite `.env.example` to swap agent-specific env vars.
+ *
+ * When an agent declares `envExampleReplacements`, each matching line
+ * (comment + KEY=) is replaced with the agent-specific key/comment.
+ */
+const rewriteEnvExample = (
+  configDir: string,
+  agent: AgentEntry,
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (
+      !agent.envExampleReplacements ||
+      agent.envExampleReplacements.size === 0
+    )
+      return;
+
+    const fs = yield* FileSystem.FileSystem;
+    const envPath = join(configDir, ".env.example");
+
+    const exists = yield* fs
+      .exists(envPath)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+    if (!exists) return;
+
+    let content = yield* fs
+      .readFileString(envPath)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    for (const [oldKey, { key, comment }] of agent.envExampleReplacements) {
+      // Replace comment line + key line, e.g.:
+      //   # Anthropic API key\nANTHROPIC_API_KEY=
+      // → # Fine-grained GitHub PAT for Copilot\nCOPILOT_GITHUB_TOKEN=
+      const pattern = new RegExp(`#[^\\n]*\\n${oldKey}=`, "g");
+      content = content.replace(pattern, `${comment}\n${key}=`);
+    }
+
+    yield* fs
+      .writeFileString(envPath, content)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+  });
+
 // ---------------------------------------------------------------------------
 // Main scaffold function
 // ---------------------------------------------------------------------------
@@ -404,6 +500,9 @@ export const scaffold = (
 
     // Rewrite main file with the selected agent factory and model
     yield* rewriteMainTs(configDir, agent, model, mainFilename);
+
+    // Rewrite .env.example for agent-specific env vars
+    yield* rewriteEnvExample(configDir, agent);
 
     return { mainFilename };
   });

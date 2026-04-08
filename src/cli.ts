@@ -19,6 +19,7 @@ import { defaultImageName } from "./run.js";
 import {
   claudeCode,
   codex as codexFactory,
+  githubCopilot as githubCopilotFactory,
   pi as piFactory,
   DEFAULT_MODEL,
   type AgentProvider,
@@ -320,6 +321,10 @@ const AGENT_REGISTRY: Record<
   "claude-code": { factory: claudeCode, defaultModel: DEFAULT_MODEL },
   pi: { factory: piFactory, defaultModel: "claude-sonnet-4-6" },
   codex: { factory: codexFactory, defaultModel: "gpt-5.4-mini" },
+  "github-copilot": {
+    factory: githubCopilotFactory,
+    defaultModel: "gpt-4o",
+  },
 };
 
 const interactiveAgentOption = Options.text("agent").pipe(
