@@ -101,7 +101,7 @@ describe("Agent registry", () => {
     expect(agent!.defaultModel).toBe("gpt-4o");
     expect(agent!.factoryImport).toBe("githubCopilot");
     expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("@githubnext/copilot-cli");
+    expect(agent!.dockerfileTemplate).toContain("@github/copilot");
     expect(agent!.envExampleReplacements).toBeDefined();
     expect(
       agent!.envExampleReplacements!.get("ANTHROPIC_API_KEY"),
@@ -583,7 +583,7 @@ describe("InitService scaffold", () => {
       "utf-8",
     );
     expect(dockerfile).toBe(githubCopilotAgent.dockerfileTemplate);
-    expect(dockerfile).toContain("@githubnext/copilot-cli");
+    expect(dockerfile).toContain("@github/copilot");
   });
 
   it("scaffolds main.mts with githubCopilot factory import when github-copilot agent selected", async () => {

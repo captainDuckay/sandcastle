@@ -176,7 +176,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
 RUN useradd -m -s /bin/bash agent
 
 # Install GitHub Copilot CLI (run as root before USER agent)
-RUN npm install -g @githubnext/copilot-cli
+RUN npm i -g @github/copilot
 
 USER agent
 
